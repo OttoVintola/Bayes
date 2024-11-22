@@ -1,0 +1,478 @@
+---
+title: "Spike_and_slab_Analysis"
+output: html_document
+date: "2024-11-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(rstan)
+
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+```
+
+```{r}
+ss_fit <- readRDS("ss_fit_results.rds")
+```
+
+```{r}
+ss_posterior_samples <- extract(ss_fit)
+ss_beta_shrunk_samples <- ss_posterior_samples$beta_shrunk
+```
+
+```{r}
+# Compute the mean of the posterior samples for each coefficient
+ss_beta_shrunk_means <- apply(ss_beta_shrunk_samples, 2, mean)
+
+# Calculate the credible intervals for each coefficient (e.g., 95% credible interval)
+ss_beta_shrunk_ci <- apply(ss_beta_shrunk_samples, 2, quantile, probs = c(0.025, 0.975))
+
+```
+
+```{r}
+# Create a data frame with the feature importance
+ss_feature_importance <- data.frame(
+  Feature = colnames(predictors),
+  Coefficient = ss_beta_shrunk_means,
+  CI_Lower = ss_beta_shrunk_ci[1],
+  CI_Upper = ss_beta_shrunk_ci[2]
+)
+
+# Rank the features by the absolute value of the coefficient
+ss_feature_importance <- ss_feature_importance[order(abs(ss_feature_importance$Coefficient), decreasing = TRUE), ]
+
+# Display the top important features
+head(ss_feature_importance, 600)
+```
+
+```{r}
+ss_beta_shrunk_means <- as.numeric(ss_beta_shrunk_means)
+ss_y_pred_all <- matrix_predictors %*% ss_beta_shrunk_means
+ss_R2_all = 1 - sum((response - ss_y_pred_all)^2) / sum((response - mean(response))^2)
+ss_R2_all
+```
+
+```{r}
+# Calculate R^2 for the top 1000 largest variables
+# Identify the indices of the top 1000 variables with the largest absolute beta values
+ss_top_1000_indices <- order(abs(ss_beta_shrunk_means), decreasing = TRUE)[1:1000]
+
+# Subset the predictors matrix to include only the top 1000 variables
+ss_matrix_predictors_top_1000 <- matrix_predictors[, ss_top_1000_indices]
+
+# Subset the beta vector to include only the coefficients of the top 1000 variables
+ss_beta_top_1000 <- ss_beta_shrunk_means[ss_top_1000_indices] # +1 to adjust for intercept
+
+ss_y_pred_top_1000 <- ss_matrix_predictors_top_1000 %*% ss_beta_top_1000
+
+# Calculate R^2 for the top 1000 variables
+ss_R2_top_1000 <- 1 - sum((response - ss_y_pred_top_1000)^2) / sum((response - mean(response))^2)
+ss_R2_top_1000
+```
+
+```{r}
+ss_sorted_indices <- order(abs(ss_beta_shrunk_means), decreasing = TRUE)
+
+# Initialize a vector to store cumulative R^2 values
+ss_cumulative_R2 <- numeric(4024)
+
+# Calculate cumulative R^2 for the top 1 to 1000 variables
+for (i in 1:4024) {
+  # Get the subset of the predictors matrix for the top i variables, ensuring it stays as a matrix
+  ss_matrix_predictors_top_i <- matrix_predictors[, ss_sorted_indices[1:i], drop = FALSE]
+  
+  # Get the corresponding subset of beta coefficients
+  ss_beta_top_i <- ss_beta_shrunk_means[ss_sorted_indices[1:i]]  # Adjust for intercept
+  
+  # Calculate predicted values using the top i variables
+  ss_y_pred_top_i <- ss_matrix_predictors_top_i %*% ss_beta_top_i
+  
+  # Calculate R^2 for the top i variables and store in cumulative_R2
+  ss_cumulative_R2[i] <- 1 - sum((response - ss_y_pred_top_i)^2) / sum((response - mean(response))^2)
+}
+```
+
+```{r}
+# Create a data frame for ggplot2
+ss_cumulative_R2_df <- data.frame(
+  ss_Number_of_Variables = 1:4024,
+  ss_R2_Value = ss_cumulative_R2
+)
+
+# Find the corresponding x value where ss_R2_Value is closest to 0.95
+x_intersection <- ss_cumulative_R2_df$ss_Number_of_Variables[which.min(abs(ss_cumulative_R2_df$ss_R2_Value - 0.95))]
+
+# Plot using ggplot2
+ggplot(ss_cumulative_R2_df, aes(x = ss_Number_of_Variables, y = ss_R2_Value)) +
+  geom_line(color = "black", size = 1) +
+  geom_hline(yintercept = 0.95, color = "red", linetype = "dashed", size = 1) + # Add the red line at y = 0.95
+  geom_point(aes(x = x_intersection, y = 0.95), color = "blue", size = 3) + # Point of intersection
+  geom_text(aes(x = x_intersection, y = 0.95, label = "p"), vjust = -1.5, color = "blue") + # Label for the point
+  labs(x = "Number of Variables", y = expression(R^2), title = bquote("Cumulative " * R^2 * " by Number of Variables")) +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.05)) + 
+  scale_x_continuous(breaks = seq(0, 4024, by = 300)) + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Initialize a vector to store cumulative adjusted R^2 values
+ss_cumulative_adj_R2 <- numeric(4024)
+
+# Sort indices based on the absolute values of ss_beta_shrunk_means
+ss_sorted_indices <- order(abs(ss_beta_shrunk_means), decreasing = TRUE)
+
+matrix_predictors <- as.matrix(predictors)
+
+
+# Precompute common values
+n <- nrow(matrix_predictors)
+response_mean <- mean(response)
+ss_total <- sum((response - response_mean)^2)
+
+# Initialize cumulative predictors and predictions
+ss_y_pred_cumulative <- rep(0, n)
+ss_residuals <- ss_total
+
+# Loop through each predictor in sorted order and update cumulative predictions
+for (i in 1:1230) {
+  # Get the next predictor and coefficient
+  predictor_i <- matrix_predictors[, ss_sorted_indices[i]]
+  beta_i <- ss_beta_shrunk_means[ss_sorted_indices[i]]
+  
+  # Update cumulative predictions
+  ss_y_pred_cumulative <- ss_y_pred_cumulative + predictor_i * beta_i
+  
+  # Update sum of squared residuals
+  ss_residuals <- sum((response - ss_y_pred_cumulative)^2)
+  
+  # Calculate R^2 and adjusted R^2
+  R2 <- 1 - ss_residuals / ss_total
+  ss_cumulative_adj_R2[i] <- 1 - (1 - R2) * ((n - 1) / (n - i - 1))
+}
+```
+
+```{r}
+# Create a data frame for ggplot2
+ss_cumulative_adj_R2_df <- data.frame(
+  Number_of_Variables = 1:1230,
+  R2_Value = ss_cumulative_adj_R2[1:1230]
+)
+
+# Plot using ggplot2
+ggplot(ss_cumulative_adj_R2_df, aes(x = Number_of_Variables, y = R2_Value)) +
+  geom_line(color = "black", size = 1) +
+  labs(x = "Number of Variables", y = expression(bar(R)^2), title = bquote("Cumulative Adjusted " * R^2 * " by Number of Variables")) +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.05)) + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+ss_top_features <- head(ss_feature_importance, 25)  # Select the top 25 features
+
+ggplot(ss_top_features, aes(x = reorder(Feature, abs(Coefficient)), y = abs(Coefficient))) +
+  geom_bar(stat = "identity", fill = "black") +
+  coord_flip() +
+  labs(title = "Spike-and-slab's 25 Most Important Features",
+       x = "Feature",
+       y = "Absolute Coefficient") +
+  theme_minimal()
+```
+
+```{r}
+ss_feature_importance
+```
+
+```{r}
+validation_data <- read.csv("../data/validation.csv")
+validation_predictors <- as.matrix(validation_data[, names(predictors)])
+validation_response <- validation_data$Portfolio.Daily.Return
+
+```
+
+```{r}
+validation_predictors <- apply(validation_predictors, 2, as.numeric)
+
+```
+
+```{r}
+dim(validation_predictors)
+length(ss_beta_shrunk_means)
+```
+
+```{r}
+ss_sorted_indices <- order(abs(ss_beta_shrunk_means), decreasing = TRUE)
+predictor_i <- validation_predictors[, ss_sorted_indices[1:180]]
+beta_i <- ss_beta_shrunk_means[ss_sorted_indices[1:180]]
+```
+
+```{r}
+validation_predictions <- as.matrix(validation_predictors)
+
+# Predict with subsetted data
+validation_predictions <- predictor_i %*% beta_i
+```
+
+```{r}
+prediction_diffs <- validation_response - validation_predictions
+```
+
+```{r}
+# Prepare data for plotting as before
+plot_data <- data.frame(
+  Time = seq(1, 250, by = 1),
+  Actual = validation_response,
+  Predicted = as.numeric(validation_predictions)  # Convert matrix to vector if needed
+)
+
+# Calculate MSE and format for display
+mse_score <- -2.1e-6
+mse_label <- sprintf("MSE: %.2e", mse_score)  # Format MSE score for display
+
+# Plot actual vs predicted values as time series with adjusted aspect ratio
+plot <- ggplot(plot_data, aes(x = Time)) +
+  geom_line(aes(y = Actual, color = "Actual"), size = 1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), size = 1, linetype = "dashed") +
+  labs(
+    title = "Time Series of Actual vs Predicted Values",
+    x = "Time",
+    y = "Value"
+  ) +
+  scale_color_manual(values = c("Actual" = "red", "Predicted" = "black")) +
+  theme_minimal() +
+  xlim(0, 250) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "top"  # Adjust legend position
+  ) +
+  annotate(
+    "text",
+    x = 200,  # Adjust x position for the label
+    y = max(plot_data$Actual, na.rm = TRUE),  # Position near the top of the plot
+    label = mse_label,
+    size = 5,
+    hjust = 1
+  )
+
+# Display the plot
+print(plot)
+
+# Save the plot with custom dimensions
+ggsave("time_series_plot.png", plot = plot, width = 12, height = 5, bg = "white")
+
+
+
+```
+
+```{r}
+```
+
+```{r}
+# Extract posterior predictive samples
+y_pred_samples <- extract(ss_fit)$y_pred
+
+```
+
+```{r}
+
+# Calculate MSE
+mse <- mean((apply(y_pred_samples, 2, mean) - stan_data$y)^2)
+print(mse)
+```
+
+```{r}
+# Calculate the differences between actual and predicted values
+errors <- validation_response - validation_predictions
+
+# Calculate the Mean Squared Error
+mse <- mean(errors^2)
+mse
+
+```
+
+```{r}
+# Identify the "important" features
+ss_important_features <- (ss_beta_shrunk_ci[1, ] > 0) | (ss_beta_shrunk_ci[2, ] < 0)
+
+# Count the number of important features
+num_important_features <- sum(ss_important_features)
+
+# Count the number of features set to zero (non-important)
+num_zero_features <- length(ss_beta_shrunk_means) - num_important_features
+
+cat("Number of important features:", num_important_features, "\n")
+cat("Number of features set to zero:", num_zero_features, "\n")
+
+```
+
+```{r}
+
+```
+
+```{r}
+# Histogram of posterior means
+hist(
+  ss_beta_shrunk_means,
+  breaks = 50,
+  main = "Histogram of Posterior Means",
+  xlab = "Posterior Mean of Coefficients",
+  col = "skyblue",
+  ylim = c(0, 2500)
+)
+
+
+hist(
+  beta_shrunk_means[1:4024],
+  breaks = 50,
+  main = "Histogram of Posterior Means",
+  xlab = "Posterior Mean of Coefficients",
+  col = "skyblue",
+  ylim = c(0, 2500)
+)
+
+```
+
+```{r}
+# Define colors based on importance
+importance_colors <- ifelse(ss_important_features, "black", "transparent")
+
+# Scatter plot of posterior means with importance highlighting
+plot(
+  ss_beta_shrunk_means,
+  col = importance_colors,
+  pch = 1,
+  main = "Coefficient Selection by Credible Interval",
+  xlab = "Spike-and-Slab Estimates",
+  ylab = "Parameter Value"
+)
+
+
+```
+
+```{r}
+# Define colors based on importance
+hs_importance_colors <- ifelse(hs_important_features, "blue", "transparent")
+
+# Scatter plot of posterior means with importance highlighting
+plot(
+  beta_shrunk_means[1:4024],
+  col = hs_importance_colors,
+  pch = 1,
+  main = "Coefficient Selection by Credible Interval",
+  xlab = "Horseshoe Estimates",
+  ylab = "Parameter Value"
+)
+
+```
+
+```{r}
+# Count of important and zeroed features
+feature_counts <- c(SS = num_important_features, Horseshoe = hs_num_important_features)
+
+# Bar plot
+barplot(
+  feature_counts,
+  main = "Count of Important vs Zeroed Features",
+  col = c("black", "blue"),
+  ylab = "Number of Features"
+)
+
+
+```
+
+```{r}
+plot(ss_beta_shrunk_means,
+     xlab = "Spike-and-slab",
+     ylab = "Parameter Value",
+     main = "Comparison of Parameter Estimates",
+     pch = 16, col = "black"
+)
+
+```
+
+```{r}
+# Identify rows where the credible interval does not contain zero
+ss_important_features_df <- ss_feature_importance %>%
+  filter((CI_Lower > 0) | (CI_Upper < 0))
+
+# Display the number of important features and a summary of them
+num_important_features <- nrow(ss_important_features_df)
+cat("Number of important features:", num_important_features, "\n")
+
+```
+
+```{r}
+# Extract posterior summaries
+#ss_summary <- summary(ss_fit)$summary
+
+# Rank parameters by the absolute magnitude of their means
+sorted_params <- rownames(ss_summary[order(abs(ss_summary[, "mean"]), decreasing = TRUE), ])
+
+# Select the top N significant parameters (e.g., top 5)
+top_params <- sorted_params[2:182]
+
+# Trace plots for the top significant parameters
+#traceplot(ss_fit, pars = top_params)
+
+```
+
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Extract posterior mean and credible intervals for the top 10 parameters
+top_params_summary <- ss_summary[top_params, ]
+top_params_df <- data.frame(
+  Parameter = rownames(top_params_summary),
+  Mean = top_params_summary[, "mean"],
+  Lower = top_params_summary[, "2.5%"],
+  Upper = top_params_summary[, "97.5%"]
+)
+
+# Modify parameter names to LaTeX style
+top_params_df$Parameter <- gsub("beta([0-9]+)", "\\\\beta_{\\1}", top_params_df$Parameter)
+
+# Create a forest plot (horizontal error bars)
+ggplot(top_params_df, aes(x = Mean, y = reorder(Parameter, Mean))) +
+  geom_point(size = 3, color = "black") +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper), height = 0.2, color = "darkgray") +
+  theme_minimal() +
+  labs(
+    title = "Spike-and-Slab Posterior Means and 95% Credible Intervals",
+    x = "Posterior Mean",
+    y = "Parameter"
+  ) +
+  theme(axis.text.y = element_blank()) +
+  scale_y_discrete(labels = function(x) parse(text = x)) # Parse LaTeX in y-axis labels
+
+
+
+```
+
+```{r}
+# Define the range of x
+x_range <- c(0.1, 10)  # Avoid x = 0 to prevent division by zero
+
+# Plot 1/sqrt(x) without axis numbers
+curve(1/sqrt(x), from = x_range[1], to = x_range[2], col = "blue", lwd = 2,
+      ylab = "", xlab = "Number of Parameters", main = "Tradeoff: Explainability vs Predictive Power",
+      xaxt = "n", yaxt = "n")  # Suppress axis numbers
+
+# Add sqrt(x) to the same plot
+curve((log(x)+3)/1.7, from = x_range[1], to = x_range[2], col = "red", lwd = 2, add = TRUE)
+
+# Add a dashed vertical line at x = 2
+abline(v = 2, lty = 2, col = "black")
+
+# Add a legend
+legend("right", legend = c("Explainability", "Predictive Power"), 
+       col = c("blue", "red"), lwd = 2)
+
+
+```

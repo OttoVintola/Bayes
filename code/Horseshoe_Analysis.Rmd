@@ -1,0 +1,403 @@
+---
+title: "Analysis"
+output: pdf_document
+date: "2024-11-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+posterior_samples <- extract(fit)
+beta_shrunk_samples <- posterior_samples$beta_shrunk
+```
+
+```{r}
+# Compute the mean of the posterior samples for each coefficient
+beta_shrunk_means <- apply(beta_shrunk_samples, 2, mean)
+
+# Calculate the credible intervals for each coefficient (e.g., 95% credible interval)
+beta_shrunk_ci <- apply(beta_shrunk_samples, 2, quantile, probs = c(0.025, 0.975))
+```
+
+Make a `data.frame` with names of the predictors, coefficients $\hat{\beta}_j$ and their CIs
+
+```{r}
+# Create a data frame with the feature importance
+feature_importance <- data.frame(
+  Feature = colnames(predictors),
+  Coefficient = beta_shrunk_means[0:4024],
+  CI_Lower = beta_shrunk_ci[1, 0:4024],
+  CI_Upper = beta_shrunk_ci[2, 0:4024]
+)
+
+# Rank the features by the absolute value of the coefficient
+feature_importance <- feature_importance[order(abs(feature_importance$Coefficient), decreasing = TRUE), ]
+
+# Display the top important features
+head(feature_importance, 25)
+```
+
+```{r}
+library(ggplot2)
+# Plot the feature importance based on shrunk coefficients
+top_features <- head(feature_importance, 25)  # Select the top 25 features
+
+ggplot(top_features, aes(x = reorder(Feature, abs(Coefficient)), y = abs(Coefficient))) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Horseshoe's 25 Most Important Features",
+       x = "Feature",
+       y = "Absolute Coefficient") +
+  theme_minimal()
+```
+
+```{r}
+# Calculate cumulative explained variance for all features
+sorted_importance <- feature_importance[order(abs(feature_importance$Coefficient), decreasing = TRUE), ]
+cumulative_variance_all <- cumsum(sorted_importance$Coefficient^2) / sum(sorted_importance$Coefficient^2)
+
+# Calculate cumulative explained variance for the top 50 features
+cumulative_variance_top_50 <- cumsum(sorted_importance$Coefficient[1:50]^2) / sum(sorted_importance$Coefficient^2)
+
+# Create a data frame for the plot
+cumulative_data <- data.frame(
+  Rank = 1:length(cumulative_variance_all),
+  CumulativeVarianceAll = cumulative_variance_all,
+  CumulativeVarianceTop50 = c(cumulative_variance_top_50, rep(NA, length(cumulative_variance_all) - 50))
+)
+
+
+# Plot the cumulative explained variance
+ggplot(cumulative_data, aes(x = Rank)) +
+  geom_line(aes(y = CumulativeVarianceAll, color = "Number of Features"), size = 1) +
+  labs(title = "Cumulative Explained Variance by Features",
+       y = "Cumulative Variance Explained",
+       x = "Number of Features") +
+  scale_color_manual(values = c("Number of Features" = "blue")) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.position = "top")
+```
+
+```{r}
+beta_shrunk_means <- as.numeric(beta_shrunk_means)
+matrix_predictors <- as.matrix(predictors)
+```
+
+```{r}
+
+# Calculate R^2 for all variables
+y_pred_all <- matrix_predictors %*% beta_shrunk_means[2:4025]
+R2_all = 1 - sum((response - y_pred_all)^2) / sum((response - mean(response))^2)
+
+
+# Calculate R^2 for the top 1000 largest variables
+# Identify the indices of the top 1000 variables with the largest absolute beta values
+top_1000_indices <- order(abs(beta_shrunk_means[2:4025]), decreasing = TRUE)[1:1000]
+
+# Subset the predictors matrix to include only the top 1000 variables
+matrix_predictors_top_1000 <- matrix_predictors[, top_1000_indices]
+
+# Subset the beta vector to include only the coefficients of the top 1000 variables
+beta_top_1000 <- beta_shrunk_means[top_1000_indices + 1] # +1 to adjust for intercept
+
+y_pred_top_1000 <- matrix_predictors_top_1000 %*% beta_top_1000
+
+# Calculate R^2 for the top 1000 variables
+R2_top_1000 <- 1 - sum((response - y_pred_top_1000)^2) / sum((response - mean(response))^2)
+R2_top_1000
+```
+
+```{r}
+# For the first plot
+plot(beta_shrunk_means[1:4024],
+     xlab = "Horseshoe Estimates",
+     ylab = "Parameter Value",
+     main = "Comparison of Parameter Estimates",
+     pch = 16, col = "blue"
+)
+
+
+
+max(beta_shrunk_means[1:4024])
+```
+
+```{r}
+# Sort the indices of the variables by the absolute values of their coefficients in descending order
+sorted_indices <- order(abs(beta_shrunk_means[2:4025]), decreasing = TRUE)
+
+# Initialize a vector to store cumulative R^2 values
+cumulative_R2 <- numeric(4024)
+
+# Calculate cumulative R^2 for the top 1 to 1000 variables
+for (i in 1:4024) {
+  # Get the subset of the predictors matrix for the top i variables, ensuring it stays as a matrix
+  matrix_predictors_top_i <- matrix_predictors[, sorted_indices[1:i], drop = FALSE]
+  
+  # Get the corresponding subset of beta coefficients
+  beta_top_i <- beta_shrunk_means[sorted_indices[1:i] + 1]  # Adjust for intercept
+  
+  # Calculate predicted values using the top i variables
+  y_pred_top_i <- matrix_predictors_top_i %*% beta_top_i
+  
+  # Calculate R^2 for the top i variables and store in cumulative_R2
+  cumulative_R2[i] <- 1 - sum((response - y_pred_top_i)^2) / sum((response - mean(response))^2)
+}
+
+```
+
+```{r}
+# Create a data frame for ggplot2
+cumulative_R2_df <- data.frame(
+  Number_of_Variables = 1:4024,
+  R2_Value = cumulative_R2
+)
+
+# Plot using ggplot2
+ggplot(cumulative_R2_df, aes(x = Number_of_Variables, y = R2_Value)) +
+  geom_line(color = "blue", size = 1) +
+  labs(x = "Number of Variables", y = expression(R^2), title = bquote("Cumulative " * R^2 * " by Number of Variables")) +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.05)) + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Initialize a vector to store cumulative adjusted R^2 values
+sorted_indices <- order(abs(beta_shrunk_means[2:4025]), decreasing = TRUE)
+cumulative_adj_R2 <- numeric(4024)
+
+# Precompute common values
+n <- nrow(matrix_predictors)
+response_mean <- mean(response)
+ss_total <- sum((response - response_mean)^2)
+
+# Initialize cumulative predictors and predictions
+y_pred_cumulative <- rep(0, n)
+ss_residuals <- ss_total
+
+# Loop through each predictor in sorted order and update cumulative predictions
+for (i in 1:1000) {
+  # Get the next predictor and coefficient
+  predictor_i <- matrix_predictors[, sorted_indices[i]]
+  beta_i <- beta_shrunk_means[sorted_indices[i] + 1]  # Adjust for intercept
+  
+  # Update cumulative predictions
+  y_pred_cumulative <- y_pred_cumulative + predictor_i * beta_i
+  
+  # Update sum of squared residuals
+  ss_residuals <- sum((response - y_pred_cumulative)^2)
+  
+  # Calculate R^2 and adjusted R^2
+  R2 <- 1 - ss_residuals / ss_total
+  cumulative_adj_R2[i] <- 1 - (1 - R2) * ((n - 1) / (n - i - 1))
+}
+```
+
+```{r}
+# Create a data frame for ggplot2
+cumulative_adj_R2_df <- data.frame(
+  Number_of_Variables = 1:1000,
+  R2_Value = cumulative_adj_R2[1:1000]
+)
+
+# Plot using ggplot2
+ggplot(cumulative_adj_R2_df, aes(x = Number_of_Variables, y = R2_Value)) +
+  geom_line(color = "blue", size = 1) +
+  labs(x = "Number of Variables", y = expression(bar(R)^2), title = bquote("Cumulative Adjusted " * R^2 * " by Number of Variables")) +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.05)) + 
+  scale_x_continuous(breaks = seq(0, 900, by = 50)) + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+tolerance <- 1e-6
+
+# Count elements close to zero within tolerance
+near_zero_count <- sum(abs(beta_shrunk_means) < tolerance)
+
+# Print result
+near_zero_count
+
+mean(beta_shrunk_means)
+```
+
+```{r}
+# Remove NA values
+beta_shrunk_means_clean <- na.omit(abs(beta_shrunk_means))
+
+# Calculate the log10 of the cleaned beta_shrunk_means, adding a small constant to avoid log(0)
+log_beta_shrunk_means <- log10(beta_shrunk_means_clean)
+
+# Estimate the density
+density_log_beta <- na.omit(na.omit(density(na.omit(log_beta_shrunk_means))))
+
+# Plot the density
+plot(density_log_beta, 
+     main = "Density of log10(beta_shrunk_means)", 
+     xlab = "log10(beta_shrunk_means)", 
+     ylab = "Density", 
+     col = "blue")
+
+
+sd(log10(beta_shrunk_means_clean))
+
+
+beta_shrunk_means_clean <- na.omit(ss_beta_shrunk_means)
+
+# Calculate the log10 of the cleaned beta_shrunk_means, adding a small constant to avoid log(0)
+log_beta_shrunk_means <- log10(abs(beta_shrunk_means_clean))
+
+
+# Estimate the density
+density_log_beta <- na.omit(na.omit(density(na.omit(log_beta_shrunk_means))))
+
+# Plot the density
+plot(density_log_beta, 
+     main = "Density of log10(beta_shrunk_means)", 
+     xlab = "log10(beta_shrunk_means)", 
+     ylab = "Density", 
+     col = "black")
+
+
+
+sd(log10(abs(beta_shrunk_means_clean)))
+
+
+
+```
+
+```{r}
+dim(validation_predictors)
+length(beta_shrunk_means)
+hs_validation_predictions <- validation_predictors[1:450] %*% beta_shrunk_means[1:450]
+```
+
+```{r}
+# Calculate the differences between actual and predicted values
+errors <- validation_response - hs_validation_predictions
+
+# Calculate the Mean Squared Error
+mse <- mean(errors^2)
+mse
+
+```
+
+```{r}
+hs_important_features <- (beta_shrunk_ci[1, ] > 0) | (beta_shrunk_ci[2, ] < 0)
+
+# Count the number of important features
+hs_num_important_features <- sum(hs_important_features)
+
+# Count the number of features set to zero (non-important)
+hs_num_zero_features <- length(beta_shrunk_means) - hs_num_important_features
+
+cat("Number of important features:", hs_num_important_features, "\n")
+cat("Number of features set to zero:", hs_num_zero_features, "\n")
+```
+
+```{r}
+hs_feature_counts <- c(Important = hs_num_important_features, Zeroed = hs_num_zero_features)
+
+# Bar plot
+barplot(
+  feature_counts,
+  main = "Count of Important vs Zeroed Features",
+  col = c("red", "gray"),
+  ylab = "Number of Features"
+)
+```
+
+```{r}
+validation_predictors <- as.matrix(validation_predictors)
+
+sorted_indices <- order(abs(beta_shrunk_means[1:4024]), decreasing = TRUE)
+
+hs_predictor_i <- validation_predictors[, sorted_indices[1:450]]
+hs_beta_i <- beta_shrunk_means[sorted_indices[1:450]]
+```
+
+```{r}
+hs_validation_predictions <- hs_predictor_i %*% hs_beta_i
+```
+
+```{r}
+# Prepare data for plotting as before
+hs_plot_data <- data.frame(
+  Time = seq(1, 250, by = 1),
+  Actual = validation_response,
+  Predicted = as.numeric(hs_validation_predictions)  # Convert matrix to vector if needed
+)
+
+# Calculate MSE and format it
+mse_score <- -9.7e-6
+mse_label <- sprintf("Predicted (MSE: %.2e)", mse_score)  # Include MSE in the legend
+
+plot <- ggplot(hs_plot_data, aes(x = Time)) +
+  geom_line(aes(y = Actual, color = "Actual"), size = 1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), size = 1, linetype = "dashed") +
+  labs(
+    title = "Time Series of Actual vs Predicted Values",
+    x = "Time",
+    y = "Value"
+  ) +
+  scale_color_manual(values = c("Actual" = "red", "Predicted" = "blue")) +
+  theme_minimal() +
+  xlim(0, 250) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "top"  # Adjust legend position
+  ) +
+  annotate(
+    "text",
+    x = 200,  # Adjust x position for the label
+    y = max(plot_data$Actual, na.rm = TRUE),  # Position near the top of the plot
+    label = mse_label,
+    size = 5,
+    hjust = 1
+  )
+
+# Display the plot
+print(plot)
+
+# Save the plot with custom dimensions
+ggsave("hs_time_series_plot.png", plot = plot, width = 12, height = 5, bg = "white")
+
+
+```
+
+```{r}
+errors <- validation_response - hs_validation_predictions
+
+# Calculate the Mean Squared Error
+mse <- mean(errors^2)
+mse
+
+```
+
+```{r}
+# Read the fitted model
+hs_fit <- readRDS("hs_fit_results.rds")
+
+# Extract the summary statistics of the parameters
+summary <- summary(hs_fit)$summary
+
+# Filter rows for beta coefficients only
+# Assuming `beta` parameters are named like `beta[1]`, `beta[2]`, etc.
+beta_rows <- grepl("^beta\\[", rownames(summary))
+
+# Get the names of beta parameters
+beta_names <- rownames(summary)[beta_rows]
+
+# Rank beta coefficients by their absolute mean value
+sorted_betas <- beta_names[order(abs(summary[beta_rows, "mean"]), decreasing = TRUE)]
+
+# Select the top N (e.g., top 10) significant beta coefficients
+top_beta_names <- sorted_betas[2:12]
+
+# Plot traceplots for the top beta coefficients
+traceplot(hs_fit, pars = top_beta_names)
+
+```
