@@ -1,0 +1,152 @@
+knitr::opts_chunk$set(echo = TRUE)
+
+clean_string <- function(string) {
+  # Words to remove
+  words_to_remove <- c("Daily.Return", "Adj.Close", "EMA", "Open", "High", "Volume", "Close", "Low")
+  
+  # Create a pattern to match any of these words
+  pattern <- paste(words_to_remove, collapse = "|")
+  
+  # Remove the words and periods
+  result <- gsub(pattern, "", string)
+  final_result <- gsub("\\.", "", result)
+  
+  return(final_result)
+}
+
+feature_importance <- data.frame(
+  Feature = colnames(predictors),
+  Coefficient = beta_shrunk_means[0:4024],
+  CI_Lower = beta_shrunk_ci[1, 0:4024],
+  CI_Upper = beta_shrunk_ci[2, 0:4024]
+)
+
+# Rank the features by the absolute value of the coefficient
+feature_importance <- feature_importance[order(abs(feature_importance$Coefficient), decreasing = TRUE), ]
+
+top_1000_features = head(feature_importance, 450)
+
+# Clean all of the top_1000_features$Feature and put them into unique_ones
+unique_ones = c()
+for (i in 1:450) {
+  # Clean each feature in the top_1000_features$Feature
+  cleaned_string <- clean_string(top_1000_features$Feature[i])
+  # Append to unique_ones if it's not already present
+  if (!(cleaned_string %in% unique_ones)) {
+    unique_ones <- c(unique_ones, cleaned_string)
+  }
+}
+
+length(unique_ones)
+
+# Create a data frame with the feature importance
+ss_feature_importance <- data.frame(
+  Feature = colnames(predictors),
+  Coefficient = ss_beta_shrunk_means[0:4024],
+  CI_Lower = ss_beta_shrunk_ci[1, 0:4024],
+  CI_Upper = ss_beta_shrunk_ci[2, 0:4024]
+)
+
+# Rank the features by the value of the coefficient
+ss_feature_importance <- ss_feature_importance[order(ss_feature_importance$Coefficient, decreasing = TRUE), ]
+
+ss_top_1000_features = head(ss_feature_importance, 1000)
+  
+  
+ss_unique_ones = c()
+for (i in 1:180) {
+  # Clean each feature in the top_1000_features$Feature
+  cleaned_string <- clean_string(ss_top_1000_features$Feature[i])
+  
+  # Append to unique_ones if it's not already present
+  if (!(cleaned_string %in% ss_unique_ones)) {
+    ss_unique_ones <- c(ss_unique_ones, cleaned_string)
+  }
+}
+length(ss_unique_ones)
+length(unique_ones)
+length(intersect(ss_unique_ones, unique_ones))
+ss_unique_ones
+
+combined_shrunk_tickers = c(ss_unique_ones, unique_ones)
+
+all_colnames = colnames(predictors)
+filtered_cols = c()
+for (j in 1:4024) {
+  cleaned_string <- clean_string(all_colnames[j])
+  
+  if (!(cleaned_string %in% filtered_cols)) {
+    filtered_cols = c(filtered_cols, cleaned_string)
+  }
+}
+
+
+# Get the elements which are in all_colsnames but not in combined_shrunk_tickers
+missing_in_combined <- setdiff(filtered_cols, combined_shrunk_tickers)
+missing_in_combined
+
+find_ticker_weights <- function(tickers, coefficients) {
+  # Create a data frame with tickers and their corresponding coefficients
+  data <- data.frame(ticker = tickers, coefficient = coefficients)
+  
+  # Sum the coefficients by ticker
+  aggregated_data <- aggregate(coefficient ~ ticker, data = data, sum)
+  
+  # Return the result as a named vector
+  result <- setNames(aggregated_data$coefficient, aggregated_data$ticker)
+  return(result)
+}
+
+
+# Select top 180
+top_180 = head(ss_feature_importance, 180)
+
+# Make a new Column called Ticker for ss_feature_importance
+top_180$Ticker = top_180$Feature
+
+# Extract the strings
+top_180$Ticker = sapply(top_180$Ticker, clean_string)
+
+# Turn Coefficient into absolute values
+top_180$Coefficient <- (top_180$Coefficient)
+
+# Sum the Coefficient of the same Tickers
+ticker_weights = data.frame(find_ticker_weights(top_180$Ticker, top_180$Coefficient))
+
+# Convert index to Ticker column
+ticker_weights <- tibble::rownames_to_column(ticker_weights, "Stock")
+
+# Rename the columns to Ticker and Weight
+names(ticker_weights)[1] = "Ticker"
+names(ticker_weights)[2] = "Weight"
+
+# Normalize
+ticker_weights$Weight = ticker_weights$Weight / sum(ticker_weights$Weight)
+
+# Make the normalized coefficient the weights
+ticker_weights[order(-ticker_weights$Weight), ]
+
+View(ticker_weights)
+
+
+library(reshape2)
+
+# Create a heatmap (simple for a single variable)
+df_melted <- melt(ticker_weights, id.vars = "Ticker")
+ggplot(df_melted, aes(x = Ticker, y = variable, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Heatmap of Ticker Importance",
+       x = "Tickers",
+       y = "Importance") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+# Create a bar plot of ticker importance
+ggplot(ticker_weights, aes(x = reorder(Ticker, Weight), y = Weight)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +  # Flip coordinates for better readability
+  labs(title = "Ticker Importance in Portfolio",
+       x = "Tickers",
+       y = "Importance (%)") +
+  theme_minimal()
