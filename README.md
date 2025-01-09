@@ -16,14 +16,18 @@ This repository contains the implementation and analysis of **Bayesian Regressio
 ## Methodology
 
 ### High-Dimensionality in Financial Data
-Financial datasets often exhibit high-dimensionality with \( p \gg n \), leading to issues such as ill-posedness, multicollinearity, and overfitting. Dimensionality reduction using **Bayesian shrinkage priors** helps address these challenges.
+Financial datasets often exhibit high-dimensionality with $p \gg n$ , leading to issues such as ill-posedness, multicollinearity, and overfitting. Dimensionality reduction using **Bayesian shrinkage priors** helps address these challenges.
 
 ### Bayesian Regression Model
 
 The Bayesian regression model is expressed as:
-\[
-y = X\beta + \epsilon, \quad \epsilon \sim \mathcal{N}(0, \sigma^2)
-\]
+$\mathbf{y} = \mathbf{X}\boldsymbol{\beta} + \boldsymbol{\epsilon}, 
+    \quad 
+    \boldsymbol{\epsilon} \sim \ \mathcal{N}(0, \sigma I), \boldsymbol{\beta} \sim \mathcal{N}(\mu ,\Lambda)$, 
+Where $\Lambda$ and $\mu$ are the prior covariance and mean, and the posterior distribution by virtue of Bayes' theorem is
+$p(\boldsymbol{\beta} | \mathbf{y}, \mathbf{X}) \propto p(\mathbf{y} | \boldsymbol{\beta}, \mathbf{X}) p(\boldsymbol{\beta})$.
+
+
 
 Shrinkage priors applied:
 1. **Horseshoe Prior**:
