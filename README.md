@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository provides a **software toolkit for Bayesian regression** on high-dimensional financial time series, with a focus on the S&P 500. It implements models with **shrinkage priors**—including **horseshoe** and **spike-and-slab**—to handle high-dimensionality, uncover sparse relationships, and generate interpretable predictions.
+This repository provides a study about Bayesian regression on high-dimensional financial time series, with a focus on the S&P 500. It implements models with **shrinkage priors**—including **horseshoe** and **spike-and-slab**—to handle high-dimensionality, discover sparsity, and generate interpretable predictions.
 
 ![Main project visualization](images/main_project_visual.png)
 
